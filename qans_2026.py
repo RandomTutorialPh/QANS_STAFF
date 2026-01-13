@@ -75,8 +75,10 @@ def generate_qr():
     qr_data = json.dumps(qr_payload, ensure_ascii=False)
 
 
-    # ================= SAVE QR TO "QR Code" FOLDER IN CURRENT DIRECTORY =================
-    qr_folder = os.path.join(BASE_DIR, "QR Code")
+    # ================= SAVE QR TO attendance/QR Code =================
+    attendance_folder = os.path.join(BASE_DIR, "attendance")
+    qr_folder = os.path.join(attendance_folder, "QR Code")
+
     os.makedirs(qr_folder, exist_ok=True)
 
     
@@ -95,7 +97,6 @@ def generate_qr():
 
     qr_path = os.path.join(qr_folder, filename)
 
-
     try:
         qr = qrcode.make(qr_data)
         qr.save(qr_path)
@@ -107,6 +108,13 @@ def generate_qr():
         "Success",
         f"QR Code generated successfully!\n\nSaved to:\n{qr_path}"
     )
+
+     # ================= CLEAR INPUT FIELDS =================
+    entry_fullname.delete(0, tk.END)
+    entry_idno.delete(0, tk.END)
+    entry_address.delete(0, tk.END)
+    entry_guardian_name.delete(0, tk.END)
+    entry_guardian_contact.delete(0, tk.END)
 
 def exit_app():
     root.destroy()
