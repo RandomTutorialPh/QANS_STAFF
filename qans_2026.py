@@ -2,7 +2,6 @@ import tkinter as tk
 from PIL import Image, ImageTk
 import os
 import sys
-import json
 import qrcode
 from tkinter import messagebox
 from datetime import datetime
@@ -15,7 +14,46 @@ def show_generate_qr():
     generate_qr_frame.tkraise()
 
 def scan_qr():
-    print("Scan QR Code")
+    scan_frame.tkraise()
+    scanned_data_label.config(text="Waiting for scan...")
+    scan_entry.delete(0, tk.END)
+    scan_entry.focus()
+
+def process_scan():
+    scanned_data = scan_entry.get().strip()
+    if not scanned_data:
+        return
+
+    # Split the scanned data by |
+    try:
+        fullname, id_no, address, guardian_name, guardian_contact = scanned_data.split("|")
+    except ValueError:
+        scanned_data_label.config(text="Invalid QR data!")
+        scan_entry.delete(0, tk.END)
+        scan_entry.focus()
+        return
+
+    # Create a human-readable formatted string
+    formatted_text = (
+        "📋 Personal Data\n"
+        f"Name: {fullname}\n"
+        f"ULI: {id_no}\n"
+        f"Address: {address}\n\n"
+        "🚨 In case of Emergency\n"
+        f"Name: {guardian_name}\n"
+        f"Contact: {guardian_contact}\n\n"
+        "💬 Sending SMS: Pending..."
+    )
+
+    scanned_data_label.config(text=formatted_text)
+
+    # Clear the hidden entry
+    scan_entry.delete(0, tk.END)
+
+    # Automatically reset after 5 seconds
+    scan_frame.after(5000, lambda: scanned_data_label.config(text="Waiting for scan..."))
+    scan_frame.after(5000, lambda: scan_entry.focus())
+
 
 def open_folder():
     folder_path = os.path.join(BASE_DIR, "attendance")
@@ -36,65 +74,26 @@ def contact_number_validation(new_value):
 
 def generate_qr():
     fullname = entry_fullname.get().strip().upper()
-    id_no = entry_idno.get().strip().upper()
-    address = entry_address.get().strip().upper()
+    id_no = entry_idno.get().strip()
+    address = entry_address.get().strip()
     guardian_name = entry_guardian_name.get().strip().upper()
-    guardian_contact = entry_guardian_contact.get().strip().upper()
+    guardian_contact = entry_guardian_contact.get().strip()
 
-    if not fullname:
-        messagebox.showerror("Validation Error", "Full Name is required.")
-        return
-    if not id_no:
-        messagebox.showerror("Validation Error", "ID No is required.")
-        return
-    if not address:
-        messagebox.showerror("Validation Error", "Address is required.")
-        return
-    if not guardian_name:
-        messagebox.showerror("Validation Error", "Guardian Name is required.")
-        return
-    if not guardian_contact:
-        messagebox.showerror("Validation Error", "Guardian Contact No is required.")
+    if not fullname or not id_no or not address or not guardian_name or not guardian_contact:
+        messagebox.showerror("Validation Error", "All fields are required.")
         return
     if not guardian_contact.isdigit() or len(guardian_contact) != 11:
-        messagebox.showerror(
-            "Validation Error",
-            "Guardian contact number must be EXACTLY 11 digits."
-        )
+        messagebox.showerror("Validation Error", "Guardian contact number must be EXACTLY 11 digits.")
         return
 
-    qr_payload = {
-        "FULL_NAME": fullname,
-        "ID_NO": id_no,
-        "ADDRESS": address,
-        "GUARDIAN_NAME": guardian_name,
-        "CONTACT_NO": guardian_contact,
-        "GENERATED_AT": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
+    qr_data = f"{fullname}|{id_no}|{address}|{guardian_name}|{guardian_contact}"
 
-    qr_data = json.dumps(qr_payload, ensure_ascii=False)
-
-
-    # ================= SAVE QR TO attendance/QR Code =================
     attendance_folder = os.path.join(BASE_DIR, "attendance")
     qr_folder = os.path.join(attendance_folder, "QR Code")
-
     os.makedirs(qr_folder, exist_ok=True)
 
-    
-    # ================= FILE NAME FORMAT =================
-    # Expected FULL NAME format: FIRST MIDDLE LAST
-    name_parts = fullname.split()
-
-    # Join name parts with underscore
-    safe_name = "_".join(name_parts)
-
-    # Date created
-    date_created = datetime.now().strftime("%Y-%m-%d")
-
-    # Final filename
-    filename = f"{safe_name}_{date_created}.png"
-
+    safe_name = "_".join(fullname.split())
+    filename = f"{safe_name}.png"
     qr_path = os.path.join(qr_folder, filename)
 
     try:
@@ -104,12 +103,8 @@ def generate_qr():
         messagebox.showerror("Error", f"Failed to generate QR Code.\n{e}")
         return
 
-    messagebox.showinfo(
-        "Success",
-        f"QR Code generated successfully!\n\nSaved to:\n{qr_path}"
-    )
+    messagebox.showinfo("Success", f"QR Code generated successfully!\n\nSaved to:\n{qr_path}")
 
-     # ================= CLEAR INPUT FIELDS =================
     entry_fullname.delete(0, tk.END)
     entry_idno.delete(0, tk.END)
     entry_address.delete(0, tk.END)
@@ -234,6 +229,51 @@ tk.Button(
 generate_qr_frame = tk.Frame(content, bg="#f4f6f9")
 generate_qr_frame.grid(row=0, column=0, sticky="nsew")
 
+# ================= SCAN QR FRAME =================
+scan_frame = tk.Frame(content, bg="#f4f6f9")
+scan_frame.grid(row=0, column=0, sticky="nsew")
+
+scan_label = tk.Label(
+    scan_frame,
+    text="Scan QR Code",
+    font=("Arial", 22, "bold"),
+    bg="#f4f6f9"
+)
+scan_label.pack(pady=(50, 20))
+
+# Display scanned data
+scanned_data_label = tk.Label(
+    scan_frame,
+    text="Waiting for scan...",
+    font=("Arial", 18),
+    bg="#f4f6f9",
+    fg="#1e293b",
+    wraplength=600,
+    justify="center"
+)
+scanned_data_label.pack(pady=20)
+
+# Hidden entry to capture scanner input
+scan_entry = tk.Entry(scan_frame)
+scan_entry.pack()
+scan_entry.place(x=-100, y=-100)  # keep it hidden
+scan_entry.bind("<Return>", lambda e: process_scan())
+
+# Home button for Scan screen
+home_btn = tk.Button(
+    scan_frame,
+    text="HOME",
+    command=show_home,
+    bg="#6B7280",
+    fg="white",
+    font=("Arial", 14, "bold"),
+    width=18,
+    height=2,
+    bd=0
+)
+home_btn.pack(pady=20)
+
+# ================= GENERATE QR FORM =================
 form = tk.Frame(generate_qr_frame, bg="#f4f6f9")
 form.place(relx=0.5, rely=0.5, anchor="center")
 
