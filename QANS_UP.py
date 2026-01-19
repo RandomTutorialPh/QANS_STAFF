@@ -6,25 +6,80 @@ import os
 import sys
 import qrcode
 from tkinter import messagebox
-from datetime import datetime
 from PIL import Image, ImageTk
 from serial.tools import list_ports
 from openpyxl import Workbook, load_workbook
-
-
+import requests
+from datetime import datetime, date
 
 # ================= GLOBAL VARIABLE ===========
 SELECTED_SMS_PORT = None
+SCAN_LOCKED = False
+
+
+# ================= Expiration check ===========
+DATE_SOURCES = [
+    "https://www.google.com",
+    "https://www.microsoft.com",
+    "https://www.cloudflare.com",
+    "https://api.github.com"
+]
+
+def check_app_expiration(expiration_date=date(2026, 1, 20)): #yy-mm-dd
+    """
+    Returns True if application is not expired.
+    Exits if expired or online date cannot be verified.
+    Prints the online date used for validation.
+    """
+
+    online_date = None
+    source_used = None
+
+    for url in DATE_SOURCES:
+        try:
+            r = requests.get(url, timeout=10)
+            date_header = r.headers.get("Date")
+
+            if not date_header:
+                continue
+
+            online_datetime = datetime.strptime(
+                date_header, "%a, %d %b %Y %H:%M:%S %Z"
+            )
+            online_date = online_datetime.date()
+            source_used = url
+            break
+
+        except Exception:
+            continue
+
+    if online_date is None:
+        print("❌ Online date verification blocked by environment.")
+        sys.exit(1)
+
+    print(f"🕒 Online date detected: {online_date} (source: {source_used})")
+
+    if online_date > expiration_date:
+        print("⛔ Application expired.")
+        sys.exit(0)
+
+    return True
+
+
 
 # ================= FUNCTIONS =================
 def show_home():
     home_frame.tkraise()
 
 def start_scan_mode():
+    global SCAN_LOCKED
+    SCAN_LOCKED = False   # 🔓 allow scanning again
+
     scan_frame.tkraise()
     scanned_data_label.config(text="Waiting for scan...")
     scan_entry.delete(0, tk.END)
     scan_entry.focus()
+
 
 def show_generate_qr():
     generate_qr_frame.tkraise()
@@ -98,10 +153,14 @@ def select_com_and_scan():
 
 
 def reset_scan_mode():
+    global SCAN_LOCKED
+    SCAN_LOCKED = False   # 🔓 unlock scanning
+
     scanned_data_label.config(text="Waiting for scan...")
     scan_entry.focus()
 
-def record_attendance(fname, mname, lname, suffix):
+
+def record_attendance(fname, mname, lname, suffix, sms_status):
     attendance_dir = os.path.join(BASE_DIR, "Attendance")
     os.makedirs(attendance_dir, exist_ok=True)
 
@@ -111,10 +170,10 @@ def record_attendance(fname, mname, lname, suffix):
     headers = [
         "FIRST NAME", "MIDDLE NAME", "LAST NAME", "SUFFIX",
         "TIME IN AM", "TIME OUT AM",
-        "TIME IN PM", "TIME OUT PM"
+        "TIME IN PM", "TIME OUT PM",
+        "SMS STATUS"
     ]
 
-    # Create file if not exists
     if not os.path.exists(file_path):
         wb = Workbook()
         ws = wb.active
@@ -125,11 +184,9 @@ def record_attendance(fname, mname, lname, suffix):
     wb = load_workbook(file_path)
     ws = wb.active
 
-    now = datetime.now()
-    time_str = now.strftime("%I:%M %p")
-    hour = now.hour
+    time_str = datetime.now().strftime("%I:%M %p")
 
-    # Find existing record
+    # Search for existing record
     for row in ws.iter_rows(min_row=2):
         if (
             row[0].value == fname and
@@ -137,32 +194,49 @@ def record_attendance(fname, mname, lname, suffix):
             row[2].value == lname and
             row[3].value == suffix
         ):
-            # AM logic
-            if hour < 12 and not row[4].value:
-                row[4].value = time_str
-            # PM logic (future-ready)
-            elif hour >= 12 and not row[6].value:
-                row[6].value = time_str
+            # Sequential filling
+            if not row[4].value:
+                row[4].value = time_str  # TIME IN AM
+            elif not row[5].value:
+                row[5].value = time_str  # TIME OUT AM
+            elif not row[6].value:
+                row[6].value = time_str  # TIME IN PM
+            elif not row[7].value:
+                row[7].value = time_str  # TIME OUT PM
+            else:
+                # ❌ Already completed
+                scanned_data_label.config(
+                    text="⚠️ Attendance already completed for today."
+                )
+                wb.save(file_path)
+                return
 
+            row[8].value = sms_status
             wb.save(file_path)
             return
 
-    # New record (first scan)
-    new_row = [fname, mname, lname, suffix, None, None, None, None]
-
-    if hour < 12:
-        new_row[4] = time_str  # TIME IN AM
-    else:
-        new_row[6] = time_str  # TIME IN PM
-
+    # New record → first scan
+    new_row = [
+        fname, mname, lname, suffix,
+        time_str, None, None, None,
+        sms_status
+    ]
     ws.append(new_row)
     wb.save(file_path)
 
 
 def process_scan():
+
+    global SCAN_LOCKED
+
+    if SCAN_LOCKED:
+        return  # ❌ ignore additional scans
+
     scanned_data = scan_entry.get().strip()
     if not scanned_data:
         return
+    
+    SCAN_LOCKED = True  # 🔒 lock after first scan
 
     try:
         fname, mname, lname, suffix, address, guardian_name, guardian_contact = scanned_data.split("|")
@@ -171,15 +245,12 @@ def process_scan():
         if suffix != ".":
             full_name += f" {suffix}"
 
-        # ✅ RECORD EXCEL HERE (BEFORE SMS)
-        record_attendance(fname, mname, lname, suffix)
-
-
     except ValueError:
         scanned_data_label.config(text="Invalid QR data!")
         scan_entry.delete(0, tk.END)
         scan_entry.focus()
         return
+
 
     # Convert guardian number to international format
     if guardian_contact.startswith("09"):
@@ -211,16 +282,22 @@ def process_scan():
     # Callback after SMS attempt
     def on_sms_done(success, response):
         if success:
+            sms_status = "SENT"
             scanned_data_label.config(
                 text=scanned_data_label.cget("text") + "\n\n✅ SMS sent successfully!"
             )
         else:
+            sms_status = "FAILED"
             scanned_data_label.config(
                 text=scanned_data_label.cget("text") + "\n\n❌ SMS failed!"
             )
 
+        # ✅ RECORD ATTENDANCE AFTER SMS RESULT
+        record_attendance(fname, mname, lname, suffix, sms_status)
+
         # Return to scan mode after 5 seconds
         scan_frame.after(5000, reset_scan_mode)
+
 
     send_sms(phone, sms_message, callback=on_sms_done)
 
@@ -610,5 +687,6 @@ tk.Button(
 ).pack(side="left", padx=20)
 
 # ================= START =================
+check_app_expiration()
 show_home()
 root.mainloop()
